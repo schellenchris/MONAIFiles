@@ -215,20 +215,19 @@ class GridPatchDataset(IterableDataset):
         Fetch single data item from `self.data`.
         """
         i = -1
-        c = 0
         nSlices = 0
-        while c + nSlices < index + 1:
-            nSlices = self.shapes[i][-1] / self.patch_iter.patch_iter.patch_size[-1]
+        while nSlices < index + 1:
+            i += 1
+            last_nSlices = nSlices
+            nSlices += self.shapes[i][-1] / self.patch_iter.patch_iter.patch_size[-1]
             if nSlices != int(nSlices): nSlices += 1
             nSlices = int(nSlices)
-            c += nSlices
-            i += 1
         if self.sliced_image_n != i:
             self.sliced_image_n = i
             self.sliced_image = [
                 apply_transform(self.transform, data_i, map_items=False) if self.transform is not None else data_i for
                 data_i, *others in self.patch_iter(self.data[i])]
-        return self.sliced_image[index - c]
+        return self.sliced_image[index - last_nSlices]
 
     def __getitem__(self, index: Union[int, slice, Sequence[int]]):
         """
