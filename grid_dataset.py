@@ -13,7 +13,6 @@ from copy import deepcopy
 from typing import Callable, Dict, Hashable, Iterable, Mapping, Optional, Sequence, Union
 
 import numpy as np
-import collections.abc
 
 from monai.config import KeysCollection
 from monai.data.dataset import Dataset
@@ -115,6 +114,7 @@ class PatchIterd:
     def __call__(self, data: Mapping[Hashable, np.ndarray]):
         d = dict(data)
         original_spatial_shape = d[first(self.keys)].shape[1:]
+
         for patch in zip(*[self.patch_iter(d[key]) for key in self.keys]):
             coords = patch[0][1]  # use the coordinate of the first item
             ret = {k: v[0] for k, v in zip(self.keys, patch)}
@@ -180,12 +180,14 @@ class GridPatchDataset(IterableDataset):
         patch_iter: Callable,
         transform: Optional[Callable] = None,
         with_coordinates: bool = True,
+        shapes = None
     ) -> None:
         super().__init__(data=data, transform=None)
         self.patch_iter = patch_iter
         self.patch_transform = transform
         self.with_coordinates = with_coordinates
         self.slices_per_image = []
+        self.shapes = shapes
         self.sliced_image_n = None
         self.sliced_image = None
 
@@ -199,18 +201,14 @@ class GridPatchDataset(IterableDataset):
                     yield out_patch, others[0]
                 else:
                     yield out_patch
-                del patch
-                del out_patch
 
     def __len__(self) -> int:
-        if len(self.slices_per_image) == 0:
-            for d in self.data:
-                nSlices = d['img'].shape[-1] / self.patch_iter.patch_iter.patch_size[-1]
-                if nSlices == int(nSlices):
-                    self.slices_per_image.append(int(nSlices))
-                else:
-                    self.slices_per_image.append(int(nSlices) + 1)
-        return sum(self.slices_per_image)
+        n = 0
+        for shape in self.shapes:
+            nSlices = shape[-1] / self.patch_iter.patch_iter.patch_size[-1]
+            n += int(nSlices)
+            if nSlices != int(nSlices): n += 1
+        return n
 
     def _transform(self, index: int):
         """
@@ -218,30 +216,27 @@ class GridPatchDataset(IterableDataset):
         """
         i = 0
         c = 0
-        while i + self.slices_per_image[c] < index + 1:
-            i += self.slices_per_image[c]
-            c += 1
-        if self.sliced_image_n != c:
-            self.sliced_image_n = c
+        nSlices = self.shapes[i][-1] / self.patch_iter.patch_iter.patch_size[-1]
+        if nSlices != int(nSlices): nSlices += 1
+        nSlices = int(nSlices)
+        while c + nSlices < index + 1:
+            c += nSlices
+            i += 1
+            nSlices = self.shapes[i][-1] / self.patch_iter.patch_iter.patch_size[-1]
+            if nSlices != int(nSlices): nSlices += 1
+            nSlices = int(nSlices)
+        if self.sliced_image_n != i:
+            self.sliced_image_n = i
             self.sliced_image = [
                 apply_transform(self.transform, data_i, map_items=False) if self.transform is not None else data_i for
-                data_i, *others in self.patch_iter(self.data[c])]
-        return self.sliced_image[index - i]
+                data_i, *others in self.patch_iter(self.data[i])]
+        return self.sliced_image[index - c]
 
     def __getitem__(self, index: Union[int, slice, Sequence[int]]):
         """
         Returns a `Subset` if `index` is a slice or Sequence, a data item otherwise.
         """
-        if isinstance(index, slice):
-            # dataset[:42]
-            start, stop, step = index.indices(len(self))
-            indices = range(start, stop, step)
-            return Subset(dataset=self, indices=indices)
-        if isinstance(index, collections.abc.Sequence):
-            # dataset[[1, 3, 4]]
-            return Subset(dataset=self, indices=index)
         return self._transform(index)
-
 
 class PatchDataset(Dataset):
     """
